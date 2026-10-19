@@ -1,0 +1,35 @@
+name: Build Skyglass
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install X11 Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libx11-dev libxext-dev make
+
+    - name: Build with ${{ matrix.compiler }}
+      run: |
+        make CC=${{ matrix.compiler }}
+
+    - name: Upload Compiled Binary
+      if: matrix.compiler == 'gcc'
+      uses: actions/upload-artifact@v4
+      with:
+        name: skyglass-linux-x86_64
+        path: skyglass
