@@ -7,9 +7,10 @@
 [![GitHub Release](https://img.shields.io/github/v/release/R1y3n/Skyglass?style=for-the-badge&color=007ACC)](https://github.com/R1y3n/Skyglass/releases)
 [![Language](https://img.shields.io/badge/Language-C-00599C?style=for-the-badge&logo=c&logoColor=white)](skyglass.c)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20(X11%2FXWayland)-FCC624?style=for-the-badge&logo=linux&logoColor=black)](#notes)
-[![RAM Footprint](https://img.shields.io/badge/RAM-~6_MB-brightgreen?style=for-the-badge)](#features)
+[![RAM Footprint](https://img.shields.io/badge/RAM-~6_MB-brightgreen?style=for-the-badge)](#features)<!--
 [![License](https://img.shields.io/github/license/R1y3n/Skyglass?style=for-the-badge&color=2ea44f)](LICENSE)
-
+-->
+[![License](https://img.shields.io/badge/License-MIT-2ea44f?style=for-the-badge)](LICENSE)
 <br>
 
 <img src="main.jpg" alt="Skyglass Preview" width="100%">
