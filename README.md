@@ -12,7 +12,7 @@
 
 <br>
 
-<img src="main.jpeg" alt="Skyglass Preview" width="100%">
+<img src="main.jpg" alt="Skyglass Preview" width="100%">
 
 </div>
 
