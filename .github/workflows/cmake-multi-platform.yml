@@ -1,35 +1,46 @@
-name: Build Skyglass
+name: Build & Release
 
 on:
   push:
     branches: [ "main" ]
+    tags:
+      - 'v*'  # Triggers automated release build on tags like v1.0, v1.1, etc.
   pull_request:
     branches: [ "main" ]
+
+permissions:
+  contents: write  # Grants permission to upload files to GitHub Releases
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    strategy:
-      fail-fast: false
-      matrix:
-        compiler: [gcc, clang]
-
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install X11 Dependencies
+    - name: Install Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y libx11-dev libxext-dev make
 
-    - name: Build with ${{ matrix.compiler }}
+    - name: Compile Skyglass
       run: |
-        make CC=${{ matrix.compiler }}
+        make CC=gcc
+        mv skyglass skyglass-x86_64
 
-    - name: Upload Compiled Binary
-      if: matrix.compiler == 'gcc'
+    # Uploads binary to GitHub Actions summary for non-tag pushes (e.g. main branch)
+    - name: Upload Build Artifact
+      if: !startsWith(github.ref, 'refs/tags/')
       uses: actions/upload-artifact@v4
       with:
-        name: skyglass-linux-x86_64
-        path: skyglass
+        name: skyglass-x86_64
+        path: skyglass-x86_64
+
+    # Automatically attaches binary to GitHub Releases when a tag is pushed
+    - name: Attach Binary to GitHub Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: skyglass-x86_64
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
