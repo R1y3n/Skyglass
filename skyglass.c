@@ -1,5 +1,5 @@
 /*
- * SKYGLASS By R1y3n
+ * SKYGLASS By R1y3n - MIT License
 */
 #define _GNU_SOURCE
 #include <stdio.h>
