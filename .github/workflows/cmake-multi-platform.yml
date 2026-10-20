@@ -1,53 +1,4 @@
-name: Build & Release
-
-on:
-  push:
-    branches: [ "main" ]
-
-permissions:
-  contents: write
-
-jobs:
-  build-x86:
-    name: Build (${{ matrix.arch }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            compiler: gcc
-            flags: ""
-            packages: "gcc libx11-dev libxext-dev"
-            setup: "true"
-
-          - arch: i686
-            compiler: gcc
-            flags: "-m32"
-            packages: "gcc-multilib libx11-dev:i386 libxext-dev:i386"
-            setup: "sudo dpkg --add-architecture i386"
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure Repos & Install Dependencies
-        run: |
-          ${{ matrix.setup }}
-          sudo apt-get update
-          sudo apt-get install -y ${{ matrix.packages }} make
-
-      - name: Compile Skyglass
-        run: |
-          make CC="${{ matrix.compiler }}" CFLAGS="-O2 ${{ matrix.flags }}"
-          mv skyglass skyglass-${{ matrix.arch }}
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: skyglass-${{ matrix.arch }}
-          path: skyglass-${{ matrix.arch }}
-
-  build-arm:
+build-arm:
     name: Build (${{ matrix.target_name }})
     runs-on: ubuntu-latest
     strategy:
@@ -56,10 +7,10 @@ jobs:
         include:
           - arch: aarch64
             target_name: aarch64
-            distro: ubuntu24.04
+            distro: ubuntu22.04
           - arch: armv7
             target_name: armhf
-            distro: ubuntu24.04
+            distro: ubuntu22.04
 
     steps:
       - uses: actions/checkout@v4
@@ -82,27 +33,3 @@ jobs:
         with:
           name: skyglass-${{ matrix.target_name }}
           path: skyglass-${{ matrix.target_name }}
-
-  release:
-    name: Publish Release
-    needs: [build-x86, build-arm]
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Binaries
-        uses: actions/download-artifact@v4
-        with:
-          path: binaries
-          merge-multiple: true
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "v1.${{ github.run_number }}"
-          name: "v1.${{ github.run_number }}"
-          files: binaries/skyglass-*
-          generate_release_notes: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
