@@ -2,33 +2,80 @@ name: Build & Release
 
 on:
   push:
-    branches: [ "main" ]
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
 
 jobs:
   build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            compiler: gcc
+            flags: ""
+            packages: "gcc libx11-dev libxext-dev"
+            extra_apt: "true"
+          - arch: i686
+            compiler: gcc
+            flags: "-m32"
+            packages: "gcc-multilib libx11-dev:i386 libxext-dev:i386"
+            extra_apt: "sudo dpkg --add-architecture i386"
+          - arch: aarch64
+            compiler: aarch64-linux-gnu-gcc
+            flags: ""
+            packages: "gcc-aarch64-linux-gnu libx11-dev:arm64 libxext-dev:arm64"
+            extra_apt: "sudo dpkg --add-architecture arm64"
+          - arch: armhf
+            compiler: arm-linux-gnueabihf-gcc
+            flags: ""
+            packages: "gcc-arm-linux-gnueabihf libx11-dev:armhf libxext-dev:armhf"
+            extra_apt: "sudo dpkg --add-architecture armhf"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          ${{ matrix.extra_apt }}
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }} make
+
+      - name: Compile Skyglass
+        run: |
+          make CC="${{ matrix.compiler }}" CFLAGS="-O2 ${{ matrix.flags }}"
+          mv skyglass skyglass-${{ matrix.arch }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skyglass-${{ matrix.arch }}
+          path: skyglass-${{ matrix.arch }}
+
+  release:
+    name: Publish Release
+    needs: build
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libx11-dev libxext-dev make
+      - name: Download Binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+          merge-multiple: true
 
-    - name: Compile Skyglass
-      run: |
-        make CC=gcc
-        mv skyglass skyglass-x86_64
-
-    - name: Publish GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: v1.0
-        name: "Skyglass v1.0"
-        files: skyglass-x86_64
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: binaries/skyglass-*
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
