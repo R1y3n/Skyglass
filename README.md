@@ -58,7 +58,7 @@ make
 
 | Option | Description | Example |
 | :--- | :--- | :--- |
-| `--city NAME` | Pick city directly from command line | `./skyglass --city "Algiers"` |
+| `--city NAME` | Pick city directly from command line | `./skyglass --city "Dubai"` |
 | `--demo` | Run offline with mock weather data | `./skyglass --demo` |
 | `--scale FLOAT` | UI scaling factor *(saved)* | `./skyglass --scale 1.5` |
 | `--fps INT` | Target frame rate limit *(saved)* | `./skyglass --fps 30` |
