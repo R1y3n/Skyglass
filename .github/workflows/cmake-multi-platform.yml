@@ -1,35 +1,84 @@
-build-arm:
-    name: Build (${{ matrix.target_name }})
+name: Build & Release
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
+          - arch: x86_64
+            command: |
+              apt-get update
+              apt-get install -y gcc libx11-dev libxext-dev make
+              make CC=gcc CFLAGS="-O2"
+              mv skyglass skyglass-x86_64
+
+          - arch: i686
+            command: |
+              dpkg --add-architecture i386
+              apt-get update
+              apt-get install -y gcc gcc-multilib libx11-dev:i386 libxext-dev:i386 make
+              make CC=gcc CFLAGS="-O2 -m32"
+              mv skyglass skyglass-i686
+
           - arch: aarch64
-            target_name: aarch64
-            distro: ubuntu22.04
-          - arch: armv7
-            target_name: armhf
-            distro: ubuntu22.04
+            command: |
+              dpkg --add-architecture arm64
+              apt-get update
+              apt-get install -y gcc-aarch64-linux-gnu libx11-dev:arm64 libxext-dev:arm64 make
+              make CC=aarch64-linux-gnu-gcc CFLAGS="-O2"
+              mv skyglass skyglass-aarch64
+
+          - arch: armhf
+            command: |
+              dpkg --add-architecture armhf
+              apt-get update
+              apt-get install -y gcc-arm-linux-gnueabihf libx11-dev:armhf libxext-dev:armhf make
+              make CC=arm-linux-gnueabihf-gcc CFLAGS="-O2"
+              mv skyglass skyglass-armhf
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Skyglass under QEMU
-        uses: uraimo/run-on-arch-action@v2
-        with:
-          arch: ${{ matrix.arch }}
-          distro: ${{ matrix.distro }}
-          githubToken: ${{ github.token }}
-          install: |
-            apt-get update
-            apt-get install -y gcc libx11-dev libxext-dev make
-          run: |
-            make CC="gcc" CFLAGS="-O2"
-            mv skyglass skyglass-${{ matrix.target_name }}
+      - name: Build in Debian Container
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/work -w /work debian:bookworm-slim bash -c '${{ matrix.command }}'
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: skyglass-${{ matrix.target_name }}
-          path: skyglass-${{ matrix.target_name }}
+          name: skyglass-${{ matrix.arch }}
+          path: skyglass-${{ matrix.arch }}
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v1.${{ github.run_number }}"
+          name: "v1.${{ github.run_number }}"
+          files: binaries/skyglass-*
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
