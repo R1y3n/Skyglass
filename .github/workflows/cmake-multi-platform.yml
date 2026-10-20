@@ -8,10 +8,9 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-x86:
     name: Build (${{ matrix.arch }})
     runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
@@ -27,28 +26,6 @@ jobs:
             flags: "-m32"
             packages: "gcc-multilib libx11-dev:i386 libxext-dev:i386"
             setup: "sudo dpkg --add-architecture i386"
-
-          - arch: aarch64
-            compiler: aarch64-linux-gnu-gcc
-            flags: ""
-            packages: "gcc-aarch64-linux-gnu libx11-dev:arm64 libxext-dev:arm64"
-            setup: |
-              sudo sed -i 's/Types: deb/Types: deb\nArchitectures: amd64 i386/' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
-              sudo dpkg --add-architecture arm64
-              echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/ports.list
-              echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
-              echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
-
-          - arch: armhf
-            compiler: arm-linux-gnueabihf-gcc
-            flags: ""
-            packages: "gcc-arm-linux-gnueabihf libx11-dev:armhf libxext-dev:armhf"
-            setup: |
-              sudo sed -i 's/Types: deb/Types: deb\nArchitectures: amd64 i386/' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
-              sudo dpkg --add-architecture armhf
-              echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/ports.list
-              echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
-              echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
 
     steps:
       - uses: actions/checkout@v4
@@ -70,9 +47,45 @@ jobs:
           name: skyglass-${{ matrix.arch }}
           path: skyglass-${{ matrix.arch }}
 
+  build-arm:
+    name: Build (${{ matrix.target_name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            target_name: aarch64
+            distro: ubuntu24.04
+          - arch: armv7
+            target_name: armhf
+            distro: ubuntu24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Skyglass under QEMU
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: ${{ matrix.arch }}
+          distro: ${{ matrix.distro }}
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update
+            apt-get install -y gcc libx11-dev libxext-dev make
+          run: |
+            make CC="gcc" CFLAGS="-O2"
+            mv skyglass skyglass-${{ matrix.target_name }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skyglass-${{ matrix.target_name }}
+          path: skyglass-${{ matrix.target_name }}
+
   release:
     name: Publish Release
-    needs: build
+    needs: [build-x86, build-arm]
     runs-on: ubuntu-latest
 
     steps:
