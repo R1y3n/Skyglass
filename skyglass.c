@@ -1406,7 +1406,7 @@ static void write_ppm(const char *path) {
     fclose(f);
 }
 static void usage(void) {
-    puts("skyglass - glass weather gadget (X11)\n  --demo            offline demo data\n  --city NAME       search & remember a city from the command line\n  --scale N         UI scale (1.0 default, saved)\n  --fps N           frame rate (default 30)\n  --below | --ontop keep the window under / over other windows\n  --reset           forget the saved city\n  keys: c weather  [ ] time  f lapse  w showreel  t train  l lightning  a aurora  o ufo  u units  r refresh  n city  q quit\n  mouse: drag to move, click the dots (or right-click) for the menu, wheel = time");
+    puts("skyglass - glass weather gadget (X11)\n  --demo            offline demo data\n  --city NAME       search & remember a city from the command line\n  --scale N         UI scale (1.0 default, saved)(N float)\n  --fps N           frame rate (default 30)(N int)\n  --below | --ontop keep the window under / over other windows\n  --reset           forget the saved city\n  keys: c weather  [ ] time  f lapse  w showreel  t train  l lightning  a aurora  o ufo  u units  r refresh  n city  q quit\n  mouse: drag to move, click the dots (or right-click) for the menu, wheel = time");
 }
 int main(int argc, char **argv) {
     const char *shot = NULL; int shot_frames = 60, shot_search = 0, shot_menu = 0, shot_train = 0, shot_aur = 0; float shot_hour = -1, shot_temp = -999; int shot_cond = -1; const char *city_arg = NULL; float scale_arg = 0;
