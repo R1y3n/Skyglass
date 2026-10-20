@@ -461,7 +461,7 @@ static int parse_openmeteo(const char *b, Weather *w) {
         w->f[i].cond = wmo_cond((int)jnum(jarr(jkey(dl, "weather_code"), i), 3)); w->f[i].pop = (int)jnum(jarr(jkey(dl, "precipitation_probability_max"), i), 0);
         w->nf++;
     }
-    snprintf(w->src, sizeof w->src, "Open-Meteo"); return 1;
+    snprintf(w->src, sizeof w->src, "By-R1y3n"); return 1;
 }
 static int parse_twc(const char *cb, const char *fb_, Weather *w) {
     if (!jkey(cb, "temperature")) return 0;
@@ -1162,9 +1162,9 @@ static void draw_ui(void) {
         snprintf(buf, sizeof buf, "%d°", tfv(f->hi)); text(1, 11.5f, cx - 9, cy + 50, buf, 0xFFFFFF, .95f, 0, 1); snprintf(buf, sizeof buf, "%d°", tfv(f->lo)); text(1, 11.5f, cx + 11, cy + 50, buf, 0xFFFFFF, .5f, 0, 1);
     }
     /* status line */
-    if (status_t > 0) { text(1, 9.5f, CW / 2.f, 20, status, RGB(255, 236, 190), clampf(status_t, 0, 1), .5f, 1); }
+    /*if (status_t > 0) { text(1, 9.5f, CW / 2.f, 20, status, RGB(255, 236, 190), clampf(status_t, 0, 1), .5f, 1); }
     else if (has_w) { snprintf(buf, sizeof buf, "%s%s", W.src, job.active ? "  ·  updating" : ""); text(1, 8.6f, CW - 24, 214, buf, 0xFFFFFF, .5f, .6f, 2); }
-    /* menu */
+    *//* menu */
     if (ui_mode == 2) {
         float mx = CW - 196, my = 48, mw = 176, mh = NMENU * 30 + 12; glass(mx, my, mw, mh, 16, 1.5f, 0);
         for (int i = 0; i < NMENU; i++) { char it[64]; const char *s = MENU_ITEMS[i];
