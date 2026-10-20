@@ -1018,7 +1018,7 @@ static void scene_update(float dt) {
     if (!train.on) { next_train -= dt; if (next_train <= 0) { train_spawn(-1, 0); next_train = rndr(26, 55); } }
     else { train.hx += train.dir * train.speed * dt; /*if (!train.horn && train.hx > 0 && train.hx < CW) { train.horn = 1; say(train.kind == 0 ? "TRAIN!  TUUUUUUU!" : "freight train... chug chug", 3); }*/
         float rear = train.hx - train.dir * train_len(); if ((train.dir == 1 && rear > CW + 4) || (train.dir == -1 && rear < -4)) train.on = 0; }
-    if (!ufo.on) { if (g_night > .7f && E.rain < .1f) { next_ufo -= dt; if (next_ufo <= 0) { memset(&ufo, 0, sizeof ufo); ufo.on = 1; ufo.side = rnd() < .5f ? -1.f : 1.f; ufo.x = ufo.side == 1 ? -20.f : CW + 20.f; ufo.y = 80; ufo.tx = sheep_x; next_ufo = rndr(90, 200); say("something is in the sky...", 4); } } }
+    if (!ufo.on) { if (g_night > .7f && E.rain < .1f) { next_ufo -= dt; if (next_ufo <= 0) { memset(&ufo, 0, sizeof ufo); ufo.on = 1; ufo.side = rnd() < .5f ? -1.f : 1.f; ufo.x = ufo.side == 1 ? -20.f : CW + 20.f; ufo.y = 80; ufo.tx = sheep_x; next_ufo = rndr(90, 200); /*say("something is in the sky...", 4);*/ } } }
     else { ufo.t += dt; if (ufo.state == 0) { float d = ufo.tx - ufo.x; ufo.x += clampf(d * 1.4f, -90, 90) * dt; if (fabsf(d) < 1) { ufo.state = 1; ufo.t = 0; } }
         else if (ufo.state == 1) { if (ufo.t > 1 && ufo.t < 5.5f) ufo.lift = clampf((ufo.t - 1) / 4.5f, 0, 1); if (ufo.t > 1.3f && !ufo.said) { ufo.said = 1; /*say("BAAA?!", 3.5f);*/ } if (ufo.t > 5.8f) { ufo.state = 2; ufo.t = 0; ufo.vx = ufo.side * 5; ufo.vy = -3; sheep_gone = 45; } }
         else { ufo.vx *= 1 + dt * 3; ufo.vy *= 1 + dt * 3; ufo.x += ufo.vx * dt * 12; ufo.y += ufo.vy * dt * 12; if (ufo.x < -40 || ufo.x > CW + 40 || ufo.y < -30) ufo.on = 0; } }
