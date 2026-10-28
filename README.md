@@ -93,6 +93,13 @@ make
 
 ---
 
+## releaselog:
+- **v1.00:** Initial release
+- **v1.16:** Removed noisy GUI debug logs
+- **v1.17:** Added various cities designs & improved light reflections
+
+---
+
 <div align="center">
 
 Made with C and X11 for maximum efficiency.
