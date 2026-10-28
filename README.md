@@ -93,7 +93,7 @@ make
 
 ---
 
-## releaselog:
+## changelog:
 - **v1.00:** Initial release
 - **v1.16:** Removed noisy GUI debug logs
 - **v1.17:** Added various cities designs & improved light reflections
