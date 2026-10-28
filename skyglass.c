@@ -1,6 +1,13 @@
 /*
- * SKYGLASS By R1y3n - MIT License
-*/
+ * SKYGLASS - a tiny glass weather gadget for Linux (X11/XWayland).
+ * One C file, no toolkit, no GPU: Xlib + MIT-SHM + a small anti-aliased software rasterizer.
+ *
+ *   build:  gcc -O2 -o skyglass skyglass.c -lX11 -lXext -lm      (needs libx11-dev libxext-dev, curl at runtime)
+ *   run:    ./skyglass            (first run asks for your city and remembers it)
+ *           ./skyglass --demo     (no network)      ./skyglass --help
+ *
+ * Weather: The Weather Channel if TWC_API_KEY (or api_key in the config) is set, otherwise Open-Meteo (free, no key).
+ */
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -329,7 +336,6 @@ static void text_shadow(int fid, float size, float x, float y, const char *s, u3
 /* ======================================================================
  *  weather model, config, network (curl subprocess, no libcurl)
  * ====================================================================== */
-/* idk why this keep failing on missing connection interfaces*/
 enum { C_CLEAR, C_PARTLY, C_CLOUDY, C_FOG, C_DRIZZLE, C_RAIN, C_STORM, C_SNOW, C_BLIZZARD, C_SLEET, C_HAIL, C_DUST, C_HEAT, NCOND };
 static const char *cond_label[NCOND] = { "Clear sky", "Partly cloudy", "Overcast", "Foggy", "Drizzle", "Rain", "Thunderstorm", "Snow", "Blizzard", "Sleet", "Hail", "Dust storm", "Scorching heat" };
 static const char *cond_name[NCOND] = { "clear", "partly", "cloudy", "fog", "drizzle", "rain", "storm", "snow", "blizzard", "sleet", "hail", "dust", "heat" };
@@ -442,7 +448,7 @@ static float hm_of(const char *p) { /* "2026-10-10T07:12..." -> 7.2 */
     char b[48]; if (!jstr(p, b, sizeof b) || strlen(b) < 16) return -1; return atoi(b + 11) + atoi(b + 14) / 60.f;
 }
 static int weekday_of(const char *ymd) { struct tm t; memset(&t, 0, sizeof t); t.tm_year = atoi(ymd) - 1900; t.tm_mon = atoi(ymd + 5) - 1; t.tm_mday = atoi(ymd + 8); t.tm_hour = 12; mktime(&t); return t.tm_wday; }
-/*parsing fails with an error if no connection instead of no connection msg*/
+
 static int parse_openmeteo(const char *b, Weather *w) {
     const char *cur = strstr(b, "\"current\":{"); const char *dl = strstr(b, "\"daily\":{"); if (!cur || !dl) return 0;
     cur += 10; dl += 8;
@@ -461,7 +467,7 @@ static int parse_openmeteo(const char *b, Weather *w) {
         w->f[i].cond = wmo_cond((int)jnum(jarr(jkey(dl, "weather_code"), i), 3)); w->f[i].pop = (int)jnum(jarr(jkey(dl, "precipitation_probability_max"), i), 0);
         w->nf++;
     }
-    snprintf(w->src, sizeof w->src, "By-R1y3n"); return 1;
+    snprintf(w->src, sizeof w->src, "Open-Meteo"); return 1;
 }
 static int parse_twc(const char *cb, const char *fb_, Weather *w) {
     if (!jkey(cb, "temperature")) return 0;
@@ -497,7 +503,7 @@ static void demo_weather(Weather *w) {
     }
     snprintf(w->src, sizeof w->src, "Demo data"); w->phrase[0] = 0; rs = sv;
 }
-/* this once has a race condition issue*/
+
 /* ---------- async downloads through curl (non-blocking pipe) ---------- */
 typedef struct { FILE *fp; char *buf; size_t len, cap; int active, kind; time_t t0; } Job;
 static Job job; static char *job_keep; 
@@ -546,7 +552,7 @@ static void parse_hits_twc(const char *b) {
 }
 
 /* ======================================================================
- *  the living scene - thanks to RAD GAME Tools for the render stuff
+ *  the living scene
  * ====================================================================== */
 #define Y_H 312.f
 #define Y_RAIL 316.f
@@ -623,14 +629,25 @@ static float owl_look = 0, owl_next = 2, owl_blink = 0, cat_blink = 0, cat_next 
 static float plane_x, plane_y, plane_d; static int plane_on = 0; static float next_plane = 25;
 static float steam_dummy;
 
+enum { LM_NONE, LM_PARIS, LM_NYC, LM_DUBAI, LM_MOSCOW, LM_LONDON, LM_TOKYO, LM_ISTANBUL, LM_CAIRO, LM_SYDNEY, LM_ALGIERS, NLM };
+static const struct { const char *n; float lat, lon, mscale; int sand; } LMT[NLM] = {
+    { "", 0, 0, 1, 0 }, { "Paris", 48.86f, 2.35f, 0, 0 }, { "New York", 40.71f, -74.0f, 0, 0 }, { "Dubai", 25.2f, 55.27f, 0, 1 }, { "Moscow", 55.75f, 37.62f, 0, 0 }, { "London", 51.51f, -.13f, 0, 0 },
+    { "Tokyo", 35.68f, 139.7f, .3f, 0 }, { "Istanbul", 41.01f, 28.98f, .35f, 0 }, { "Cairo", 30.04f, 31.24f, 0, 1 }, { "Sydney", -33.87f, 151.2f, 0, 0 }, { "Algiers", 36.75f, 3.06f, .6f, 0 } };
+static int lm_kind = 0, g_min = 0;
+static int lm_pick(void) {
+    for (int k = 1; k < NLM; k++) { float dla = cfg.lat - LMT[k].lat, dlo = (cfg.lon - LMT[k].lon) * cosf(LMT[k].lat * PI_F / 180); if (sqrtf(dla * dla + dlo * dlo) * 111.f < 60.f) return k; }
+    return 0;
+}
+
 static void scene_init(u32 seed) {
-    u32 sv = rs; rs = seed ? seed : 1; init_tables(seed ^ 0x9e3779b9u);
+    u32 sv = rs; rs = seed ? seed : 1; init_tables(seed ^ 0x9e3779b9u); lm_kind = lm_pick();
     for (int i = 0; i < 110; i++) { stars[i][0] = rndr(0, CW); stars[i][1] = rndr(8, Y_H - 40); stars[i][2] = powf(rnd(), 2.2f) * .9f + .1f; stars[i][3] = rnd() * 6; stars[i][4] = rndr(1, 4); stars[i][5] = (float)(rnd() < .3f ? 0xFFE8C8 : rnd() < .5f ? 0xC8DCFF : 0xFFFFFF); }
     free(mt0); free(mt1); free(hl); ridge_w = PW; mt0 = (float *)calloc(PW, 4); mt1 = (float *)calloc(PW, 4); hl = (float *)calloc(PW, 4);
     for (int x = 0; x < PW; x++) {
         float lx = x / S - MARG;
-        float n = fbm1(lx * .0075f + 3.1f, 5), rid = 1 - fabsf(2 * n - 1); mt0[x] = Y_H - (14 + (.55f * rid + .45f * n) * 82);
-        float n2 = fbm1(lx * .012f + 40.f, 5); mt1[x] = Y_H - (6 + n2 * 30 + vn1(lx * .35f) * 2);
+        float ms = LMT[lm_kind].mscale; float n = fbm1(lx * .0075f + 3.1f, 5), rid = 1 - fabsf(2 * n - 1); mt0[x] = Y_H - (14 + (.55f * rid + .45f * n) * 82) * ms;
+        if (lm_kind == LM_TOKYO) { float dxf = fabsf(lx - CW * .2f) / 120.f; float fj = dxf < 1 ? 96 * powf(1 - dxf, 1.25f) : 0; if (Y_H - fj < mt0[x]) mt0[x] = Y_H - fj; }
+        float n2 = fbm1(lx * .012f + 40.f, 5); mt1[x] = Y_H - (6 + n2 * 30 + vn1(lx * .35f) * 2) * ms;
         float n3 = fbm1(lx * .02f + 90.f, 4); hl[x] = Y_RAIL - 4 - (2 + n3 * 14);
     }
     nhouses = 0; float xs[2] = { .30f * CW, .70f * CW };
@@ -788,8 +805,8 @@ static void draw_far_land(void) {
     float h2 = clampf(.12f + E.fog * .4f, 0, .9f);
     u32 hca = g_season == 0 ? RGB(150, 100, 48) : g_season == 1 ? RGB(66, 112, 62) : RGB(120, 126, 116);
     u32 ht = mixc(mixc(LT(mixc(RGB(48, 80, 54), hca, .45f)), skyBot, h2), LT(RGB(232, 238, 250)), sn * .75f), hb = mixc(mixc(LT(RGB(36, 62, 46)), skyBot, h2), LT(RGB(220, 228, 244)), sn * .75f);
-    draw_ridge(hl, Y_RAIL + 1, ht, hb, 77, .12f, 0);
-    for (int i = 0; i < ntrees; i++) {
+    if (!lm_kind) draw_ridge(hl, Y_RAIL + 1, ht, hb, 77, .12f, 0);
+    for (int i = 0; i < (lm_kind ? 0 : ntrees); i++) {
         Tree *t = &trees[i]; u32 c; float x = t->x, y = t->y;
         if (t->kind) { c = mixc(LT(RGB(30, 66, 46)), skyBot, h2 * .6f); c = mixc(c, LT(RGB(230, 238, 250)), sn * .7f);
             float p[6] = { x, y - t->h, x - t->h * .2f, y, x + t->h * .2f, y }; poly(p, 3, c, 1); }
@@ -798,9 +815,178 @@ static void draw_far_land(void) {
             ellipse(x, y - t->h * .5f, t->h * .3f, t->h * .5f, 0, c, 1); }
     }
 }
+
+/* ======================================================================
+ *  landmark cities (only a few world-famous places; everything else keeps the village)
+ * ====================================================================== */
+static float lmh(float e) { return clampf(.10f + E.fog * .5f + E.dust * .35f + e, 0, .95f); }
+#define KC(c, e) mixc(LT(c), skyBot, lmh(e))
+#define YB (Y_RAIL - 1.5f)
+static void snowcap(float x, float y, float w) { if (E.snowc > .2f) rrect(x - .4f, y - .9f, w + .8f, 1.8f, .8f, LT(RGB(240, 246, 255)), E.snowc * .9f); }
+static void lit_wins(float x, float yb, float w, float h, int seed, float px, float py, float dens) {
+    if (g_night < .12f) return; u32 wc[4] = { RGB(255, 214, 120), RGB(255, 190, 90), RGB(190, 220, 255), RGB(255, 232, 170) };
+    for (float wy = yb - h + 3; wy < yb - 3; wy += py) for (float wx = x + 2; wx < x + w - 2.4f; wx += px) {
+        unsigned hs = (unsigned)(wx * 7.1f) * 73856093u ^ (unsigned)(wy * 5.3f) * 19349663u ^ (unsigned)seed * 83492791u; hs ^= hs >> 13; hs *= 1274126177u;
+        if (((hs >> 5) & 15) / 15.f > dens) continue; rrect(wx, wy, 1.5f, 2.1f, .3f, wc[(hs >> 12) & 3], clampf(g_night * 1.4f, 0, 1) * .95f);
+    }
+}
+static void block(float x, float yb, float w, float h, u32 col, float e, int seed, int style) {
+    u32 c = KC(col, e); rrect_grad(x, yb - h, w, h, .6f, scalec(c, 1.08f, 1.08f, 1.1f), 1, scalec(c, .82f, .84f, .9f), 1); rrect(x + w * .66f, yb - h, w * .34f, h, .5f, scalec(c, .72f, .74f, .8f), .5f);
+    if (style == 1) block(x + w * .18f, yb - h + 1, w * .64f, h * .22f, col, e, seed + 3, 0);
+    if (style == 2) capsule(x + w / 2, yb - h, x + w / 2, yb - h - 7 - (seed % 5), .35f, .25f, scalec(c, .7f, .7f, .75f), 1);
+    snowcap(x, yb - h, w); lit_wins(x, yb, w, h, seed, 3.4f, 4.3f, .55f);
+    if (style == 2 && g_night > .2f && ((int)(g_t * 1.2f) + seed) % 2 == 0) glow_add(x + w / 2, yb - h - 7 - (seed % 5), 4, RGB(255, 60, 50), .9f * g_night);
+}
+static void skyline(float x0, float x1, float hmin, float hmax, float wmin, float wmax, u32 c0, u32 c1, float e, u32 seed, int style) {
+    u32 sv = rs; rs = seed; float x = x0; int i = 0;
+    while (x < x1) { float w = rndr(wmin, wmax), h = rndr(hmin, hmax); u32 c = mixc(c0, c1, rnd()); block(x, YB, w, h, c, e, (int)seed + i * 7, style == 9 ? (int)(rnd() * 3) : style); x += w + rndr(0, 2); i++; }
+    rs = sv;
+}
+static void lm_paris(void) {
+    float yb = YB; skyline(0, CW, 6, 10, 20, 34, RGB(190, 180, 168), RGB(204, 196, 182), .35f, 5, 0);
+    u32 sv = rs; rs = 17; float x = -4; int i = 0;
+    while (x < CW) { float w = rndr(16, 28), h = rndr(12, 19); u32 body = KC(mixc(RGB(222, 210, 186), RGB(236, 228, 208), rnd()), .04f);
+        rrect(x, yb - h, w, h, .5f, body, 1); rrect(x + w * .7f, yb - h, w * .3f, h, .4f, scalec(body, .8f, .8f, .86f), .5f);
+        float rp[8] = { x - .8f, yb - h, x + w + .8f, yb - h, x + w - 2.5f, yb - h - 5.5f, x + 2.5f, yb - h - 5.5f }; poly(rp, 4, KC(RGB(96, 102, 116), .04f), 1); snowcap(x, yb - h - 5.5f, w);
+        for (float dx = 4; dx < w - 3; dx += 6) rrect(x + dx, yb - h - 4.4f, 1.6f, 2.4f, .4f, g_night > .12f ? RGB(255, 210, 120) : KC(RGB(60, 64, 78), 0), g_night > .12f ? clampf(g_night * 1.4f, 0, 1) : .8f);
+        lit_wins(x, yb, w, h, 40 + i, 3.6f, 4.4f, .5f); x += w + rndr(0, 1.5f); i++; }
+    rs = sv;
+    { float cx = CW * .30f; u32 wh = KC(RGB(240, 236, 228), .04f); rrect(cx - 14, yb - 14, 28, 14, .6f, wh, 1); ellipse(cx, yb - 15, 8.5f, 10, 0, wh, 1); for (int k = -1; k <= 1; k += 2) ellipse(cx + k * 10, yb - 14, 4.2f, 6, 0, wh, 1);
+      capsule(cx, yb - 24, cx, yb - 30, .4f, .3f, wh, 1); if (g_night > .2f) glow_add(cx, yb - 18, 20, RGB(255, 226, 170), .3f * g_night); }
+    { float cx = CW * .50f; block(cx - 6.5f, yb, 13, 60, RGB(74, 76, 88), .05f, 77, 0); }
+    { float cx = CW * .66f, H0 = 150; u32 iron = KC(RGB(96, 82, 70), .05f); float xl[15], xr[15], yy[15], wt[15];
+        for (int i2 = 0; i2 <= 14; i2++) { float t = i2 / 14.f; wt[i2] = 1.1f + 17.5f * powf(1 - t, 2.6f); yy[i2] = yb - t * H0; xl[i2] = cx - wt[i2]; xr[i2] = cx + wt[i2]; }
+        for (int i2 = 0; i2 < 14; i2++) { capsule(xl[i2], yy[i2], xl[i2 + 1], yy[i2 + 1], 1.0f, .8f, iron, 1); capsule(xr[i2], yy[i2], xr[i2 + 1], yy[i2 + 1], 1.0f, .8f, iron, 1);
+            if (i2 < 11) { capsule(xl[i2], yy[i2], xr[i2 + 1], yy[i2 + 1], .38f, .38f, iron, .75f); capsule(xr[i2], yy[i2], xl[i2 + 1], yy[i2 + 1], .38f, .38f, iron, .75f); } }
+        rrect(cx - wt[4] - 1.5f, yy[4] - .8f, wt[4] * 2 + 3, 2.2f, .6f, iron, 1); rrect(cx - wt[8] - 1.2f, yy[8] - .8f, wt[8] * 2 + 2.4f, 2, .6f, iron, 1); arc(cx, yb + 2, 12, 1.4f, PI_F + .15f, 2 * PI_F - .15f, iron, 1);
+        if (g_night > .15f) { u32 gold = RGB(255, 196, 96); float a = clampf(g_night * 1.3f, 0, 1); for (int i2 = 0; i2 < 14; i2++) { capsule(xl[i2], yy[i2], xl[i2 + 1], yy[i2 + 1], .8f, .8f, gold, .8f * a); capsule(xr[i2], yy[i2], xr[i2 + 1], yy[i2 + 1], .8f, .8f, gold, .8f * a); }
+            glow_add(cx, yb - H0 * .3f, 46, gold, .3f * a); glow_add(cx, yb - H0 * .75f, 24, gold, .2f * a);
+            if (g_min < 5) for (int k = 0; k < 16; k++) { float ph = floorf(g_t * 7 + k * 1.618f); float aa = fmodf(g_t * 7 + k * 1.618f, 1); if (aa < .3f) { float hh = fabsf(fmodf(sinf(ph * 12.9898f + k) * 43758.5f, 1)); float h2 = fabsf(fmodf(sinf(ph * 78.2f + k * 3) * 9631.f, 1)); circle(cx + (h2 - .5f) * 2 * (1.1f + 17.5f * powf(1 - hh, 2.6f)), yb - hh * H0, 1.2f, 0xFFFFFF, 1 - aa * 3); } } }
+        capsule(cx, yb - H0, cx, yb - H0 - 5, .5f, .3f, iron, 1); }
+}
+static void lm_nyc(void) {
+    float yb = YB; skyline(0, CW, 28, 78, 10, 18, RGB(78, 88, 112), RGB(104, 112, 136), .32f, 21, 9); skyline(0, CW, 20, 58, 12, 22, RGB(112, 118, 136), RGB(146, 148, 160), .1f, 31, 9);
+    { float cx = CW * .43f; block(cx - 7, yb, 14, 78, RGB(186, 190, 200), .04f, 5, 0); u32 sil = KC(RGB(214, 218, 228), .02f); for (int k = 0; k < 4; k++) ellipse(cx, yb - 78 - k * 4.2f, 7 - k * 1.5f, 5.8f - k * 1.1f, 0, sil, 1); capsule(cx, yb - 92, cx, yb - 108, .5f, .2f, sil, 1); if (g_night > .2f) glow_add(cx, yb - 88, 20, RGB(255, 250, 235), .55f * g_night); }
+    { float cx = CW * .57f; u32 st = KC(RGB(202, 198, 186), .03f); block(cx - 11, yb, 22, 52, RGB(202, 198, 186), .03f, 7, 0); block(cx - 8, yb - 52, 16, 34, RGB(202, 198, 186), .03f, 8, 0); block(cx - 5, yb - 86, 10, 22, RGB(202, 198, 186), .03f, 9, 0);
+        float tp[8] = { cx - 3.6f, yb - 108, cx + 3.6f, yb - 108, cx + 1.1f, yb - 124, cx - 1.1f, yb - 124 }; poly(tp, 4, st, 1); capsule(cx, yb - 124, cx, yb - 142, .5f, .2f, st, 1);
+        if (g_night > .15f) { u32 cs[4] = { RGB(255, 60, 70), RGB(255, 230, 90), RGB(255, 255, 255), RGB(80, 150, 255) }; u32 c = cs[(int)(g_t * .2f) % 4]; glow_add(cx, yb - 112, 24, c, .65f * g_night); rrect(cx - 4, yb - 112, 8, 4, 1, c, .8f * g_night); } }
+    { float cx = CW * .75f; u32 gl = KC(RGB(110, 138, 166), .03f); float bp[8] = { cx - 9.5f, yb, cx + 9.5f, yb, cx + 5.5f, yb - 118, cx - 5.5f, yb - 118 }; poly(bp, 4, gl, 1); float rt[6] = { cx + 5.5f, yb - 118, cx, yb - 118, cx + 9.5f, yb }; poly(rt, 3, scalec(gl, .72f, .74f, .8f), .6f);
+        capsule(cx, yb - 118, cx, yb - 150, .6f, .2f, gl, 1); if (g_night > .15f) { glow_add(cx, yb - 150, 10 + 3 * sinf(g_t * 3), RGB(255, 255, 255), .8f * g_night); glow_add(cx, yb - 60, 36, RGB(180, 210, 255), .16f * g_night); } }
+}
+static void lm_dubai(void) {
+    float yb = YB; skyline(0, CW, 22, 58, 9, 15, RGB(150, 170, 200), RGB(176, 192, 214), .36f, 41, 3); skyline(0, CW, 26, 82, 10, 17, RGB(112, 142, 184), RGB(166, 192, 220), .1f, 51, 3);
+    { float cx = CW * .2f; u32 wh = KC(RGB(236, 238, 244), .03f); ellipse(cx + 2, yb + .5f, 20, 3, 0, KC(RGB(214, 190, 140), .03f), 1); float sp[10] = { cx - 5, yb - 2, cx - 5, yb - 72, cx - 3, yb - 72, cx + 9, yb - 18, cx + 9, yb - 2 }; poly(sp, 5, wh, 1);
+        if (g_night > .15f) { u32 c = mixc(RGB(80, 120, 255), RGB(255, 90, 200), .5f + .5f * sinf(g_t * .4f)); float sg[6] = { cx - 3, yb - 72, cx + 9, yb - 18, cx - 3, yb - 4 }; poly(sg, 3, c, .55f * g_night); glow_add(cx + 2, yb - 36, 40, c, .3f * g_night); } }
+    { float cx = CW * .6f; u32 gl = KC(RGB(176, 196, 216), .03f), dk = scalec(gl, .74f, .78f, .86f);
+        float s1[8] = { cx - 7, yb, cx + 7, yb, cx + 5.5f, yb - 60, cx - 5.5f, yb - 60 }, s2[8] = { cx - 5, yb - 59, cx + 5, yb - 59, cx + 3.8f, yb - 105, cx - 3.8f, yb - 105 }, s3[8] = { cx - 3.4f, yb - 104, cx + 3.4f, yb - 104, cx + 2.2f, yb - 140, cx - 2.2f, yb - 140 }, s4[8] = { cx - 2, yb - 139, cx + 2, yb - 139, cx + .8f, yb - 165, cx - .8f, yb - 165 };
+        poly(s1, 4, gl, 1); poly(s2, 4, gl, 1); poly(s3, 4, gl, 1); poly(s4, 4, gl, 1); float r1[6] = { cx, yb, cx + 7, yb, cx + 5.5f, yb - 60 }; poly(r1, 3, dk, .6f); capsule(cx, yb - 165, cx, yb - 186, .5f, .15f, gl, 1);
+        if (g_night > .12f) { float a = clampf(g_night * 1.3f, 0, 1); glow_add(cx, yb - 90, 60, RGB(150, 190, 255), .3f * a); for (int k = 0; k < 7; k++) capsule(cx, yb - 8 - k * 22, cx, yb - 24 - k * 22, .5f, .5f, RGB(210, 230, 255), .6f * a); if (((int)(g_t * 1.3f)) % 2 == 0) glow_add(cx, yb - 186, 5, RGB(255, 60, 50), a); } }
+}
+static void onion(float cx, float cy, float r, u32 c1, u32 c2) {
+    ellipse(cx, cy, r, r * 1.15f, 0, c1, 1); float tp[6] = { cx - r * .45f, cy - r * .7f, cx + r * .45f, cy - r * .7f, cx, cy - r * 2.3f }; poly(tp, 3, c1, 1); ellipse(cx - r * .3f, cy, r * .3f, r * 1.05f, 0, c2, .85f); ellipse(cx + r * .3f, cy, r * .3f, r * 1.05f, 0, c2, .85f);
+    capsule(cx, cy - r * 2.2f, cx, cy - r * 3.1f, .3f, .3f, RGB(230, 196, 90), 1); capsule(cx - r * .5f, cy - r * 2.7f, cx + r * .5f, cy - r * 2.7f, .3f, .3f, RGB(230, 196, 90), 1);
+}
+static void lm_moscow(void) {
+    float yb = YB; skyline(0, CW, 8, 18, 12, 22, RGB(170, 150, 140), RGB(196, 178, 164), .3f, 61, 0);
+    u32 brick = KC(RGB(150, 58, 46), .04f); float wx0 = CW * .34f, wx1 = CW * .92f;
+    { u32 gold = KC(RGB(222, 176, 62), .03f); u32 g2 = scalec(gold, 1.15f, 1.1f, .9f); onion(CW * .45f, yb - 32, 4, gold, g2); onion(CW * .49f, yb - 36, 3.4f, gold, g2); onion(CW * .41f, yb - 30, 3.2f, gold, g2);
+      float bx = CW * .53f; rrect(bx - 4, yb - 62, 8, 62, .5f, KC(RGB(236, 230, 214), .03f), 1); onion(bx, yb - 66, 3.6f, gold, g2); if (g_night > .2f) glow_add(CW * .47f, yb - 36, 28, RGB(255, 200, 100), .25f * g_night); }
+    rrect(wx0, yb - 14, wx1 - wx0, 14, 0, brick, 1); for (float x = wx0; x < wx1; x += 4.2f) rrect(x, yb - 17, 2.5f, 3.4f, 0, brick, 1);
+    if (g_night > .15f) { rrect(wx0, yb - 14, wx1 - wx0, 14, 0, RGB(255, 190, 90), .22f * g_night); glow_add((wx0 + wx1) / 2, yb - 6, 120, RGB(255, 190, 90), .12f * g_night); }
+    float tx[4] = { .40f, .5f, .86f, .92f }; for (int k = 0; k < 4; k++) { float x = CW * tx[k]; float h = 24 + (k % 2) * 6; rrect(x - 3.6f, yb - 14 - h, 7.2f, h + 2, .3f, brick, 1); float rf[6] = { x - 5, yb - 14 - h, x + 5, yb - 14 - h, x, yb - 14 - h - 13 }; poly(rf, 3, KC(RGB(46, 120, 86), .03f), 1); }
+    { float x = CW * .62f; u32 wh = KC(RGB(232, 226, 210), .03f); rrect(x - 5.5f, yb - 14 - 36, 11, 40, .4f, brick, 1); rrect(x - 6.4f, yb - 14 - 44, 12.8f, 9, .4f, brick, 1); circle(x, yb - 14 - 40, 3.2f, wh, 1);
+      float rf[6] = { x - 7, yb - 14 - 44, x + 7, yb - 14 - 44, x, yb - 14 - 66 }; poly(rf, 3, KC(RGB(46, 120, 86), .03f), 1); capsule(x, yb - 80, x, yb - 84, .4f, .3f, RGB(230, 196, 90), 1);
+      u32 star = RGB(255, 40, 50); circle(x, yb - 86, 2.4f, star, 1); glow_add(x, yb - 86, 9 + (g_night > .2f ? 6.f : 0.f), star, .35f + .5f * g_night); if (g_night > .15f) glow_add(x, yb - 14 - 40, 6, RGB(255, 230, 150), .8f * g_night); }
+    { float cx = CW * .74f; u32 wl = KC(RGB(236, 222, 200), .03f), rd = KC(RGB(186, 60, 50), .03f); rrect(cx - 20, yb - 14, 40, 14, .4f, rd, 1); rrect(cx - 20, yb - 14, 40, 3, .4f, wl, .9f);
+      rrect(cx - 4.6f, yb - 40, 9.2f, 28, .4f, wl, 1); float t2[6] = { cx - 5.5f, yb - 40, cx + 5.5f, yb - 40, cx, yb - 56 }; poly(t2, 3, rd, 1); capsule(cx, yb - 56, cx, yb - 61, .4f, .3f, RGB(230, 196, 90), 1);
+      u32 pc[6] = { RGB(60, 150, 90), RGB(230, 190, 60), RGB(200, 60, 60), RGB(70, 120, 200), RGB(60, 150, 90), RGB(230, 120, 50) }; float px2[6] = { -17, -10, 10, 17, -3.5f, 3.5f }, py2[6] = { 18, 22, 22, 18, 28, 28 }, pr[6] = { 4.4f, 4, 4, 4.4f, 3.4f, 3.4f };
+      for (int k = 0; k < 6; k++) onion(cx + px2[k], yb - py2[k] + 8, pr[k] * .8f, KC(pc[k], .03f), KC(mixc(pc[k], 0xFFFFFF, .45f), .03f)); onion(cx, yb - 44, 5.6f, KC(RGB(60, 150, 90), .03f), KC(RGB(236, 222, 150), .03f));
+      if (g_night > .2f) glow_add(cx, yb - 24, 40, RGB(255, 190, 110), .3f * g_night); }
+}
+static void lm_london(void) {
+    float yb = YB; skyline(0, CW, 12, 34, 12, 22, RGB(150, 140, 136), RGB(176, 166, 158), .28f, 91, 0);
+    { u32 st = KC(RGB(200, 176, 130), .04f); rrect(CW * .5f, yb - 14, CW * .26f, 14, .4f, st, 1); for (int k = 0; k < 5; k++) { float x = CW * .5f + 6 + k * 18; float rf[6] = { x - 2, yb - 14, x + 2, yb - 14, x, yb - 24 }; poly(rf, 3, KC(RGB(96, 100, 112), .04f), 1); } lit_wins(CW * .5f, yb, CW * .26f, 14, 3, 3.2f, 4, .6f); }
+    { float cx = CW * .5f; u32 st = KC(RGB(200, 172, 116), .03f); rrect(cx - 4.8f, yb - 62, 9.6f, 62, .3f, st, 1); rrect(cx - 3.2f, yb - 62, 3, 62, 0, scalec(st, 1.1f, 1.1f, 1.1f), .4f); rrect(cx - 6.2f, yb - 78, 12.4f, 16, .4f, st, 1);
+      float rf[6] = { cx - 7, yb - 78, cx + 7, yb - 78, cx, yb - 100 }; poly(rf, 3, KC(RGB(80, 86, 98), .03f), 1); capsule(cx, yb - 100, cx, yb - 108, .4f, .2f, RGB(222, 180, 70), 1);
+      circle(cx, yb - 70, 4.4f, KC(RGB(250, 246, 226), 0), 1); ring(cx, yb - 70, 4.4f, .7f, RGB(210, 170, 70), 1); capsule(cx, yb - 70, cx, yb - 73.5f, .3f, .3f, RGB(40, 40, 40), 1); capsule(cx, yb - 70, cx + 2.4f, yb - 69, .3f, .3f, RGB(40, 40, 40), 1);
+      if (g_night > .12f) { circle(cx, yb - 70, 4.4f, RGB(255, 226, 140), .75f * g_night); glow_add(cx, yb - 70, 18, RGB(255, 210, 110), .5f * g_night); } }
+    { float cx = CW * .33f, cy = yb - 40, r = 36; float an = g_t * .02f; u32 wh = KC(RGB(240, 242, 248), .03f); capsule(cx - 15, yb, cx, cy, .9f, .9f, wh, 1); capsule(cx + 15, yb, cx, cy, .9f, .9f, wh, 1);
+      ring(cx, cy, r, 1.1f, wh, 1); ring(cx, cy, r - 3, .5f, wh, .8f); for (int k = 0; k < 16; k++) { float a = an + k * PI_F / 8; capsule(cx, cy, cx + cosf(a) * r, cy + sinf(a) * r, .22f, .22f, wh, .6f); float px2 = cx + cosf(a) * (r + 1.5f), py2 = cy + sinf(a) * (r + 1.5f); ellipse(px2, py2, 1.8f, 2.2f, 0, g_night > .15f ? RGB(200, 230, 255) : wh, 1); }
+      if (g_night > .15f) { ring(cx, cy, r, 3, RGB(90, 150, 255), .35f * g_night); glow_add(cx, cy, 48, RGB(90, 150, 255), .12f * g_night); } }
+    { float cx = CW * .84f; u32 gl = KC(RGB(158, 184, 208), .03f); float sp[6] = { cx - 8.5f, yb, cx + 8.5f, yb, cx, yb - 120 }; poly(sp, 3, gl, 1); float rf[6] = { cx, yb, cx + 8.5f, yb, cx, yb - 120 }; poly(rf, 3, scalec(gl, .74f, .78f, .86f), .7f);
+      for (int k = 1; k < 8; k++) capsule(cx - 8.5f * (1 - k / 8.f), yb - k * 15, cx + 8.5f * (1 - k / 8.f), yb - k * 15, .2f, .2f, 0xFFFFFF, .3f); if (g_night > .15f) glow_add(cx, yb - 70, 40, RGB(220, 235, 255), .25f * g_night); }
+}
+static void lm_tokyo(void) {
+    float yb = YB; skyline(0, CW, 22, 60, 10, 17, RGB(96, 108, 136), RGB(124, 134, 160), .3f, 71, 9); skyline(0, CW, 16, 46, 11, 19, RGB(108, 114, 134), RGB(140, 144, 160), .1f, 72, 9);
+    { float cx = CW * .60f, H0 = 124; float xl[11], xr[11], yy[11]; for (int i = 0; i <= 10; i++) { float t = i / 10.f; float w = 1.2f + 13.5f * powf(1 - t, 1.25f); yy[i] = yb - t * H0 * .82f; xl[i] = cx - w; xr[i] = cx + w; }
+        for (int i = 0; i < 10; i++) { u32 c = KC(i % 2 ? RGB(240, 236, 232) : RGB(238, 90, 40), .03f); capsule(xl[i], yy[i], xl[i + 1], yy[i + 1], .95f, .8f, c, 1); capsule(xr[i], yy[i], xr[i + 1], yy[i + 1], .95f, .8f, c, 1); capsule(xl[i], yy[i], xr[i + 1], yy[i + 1], .35f, .35f, c, .7f); capsule(xr[i], yy[i], xl[i + 1], yy[i + 1], .35f, .35f, c, .7f); }
+        u32 rd = KC(RGB(238, 90, 40), .03f); rrect(cx - 12, yy[3] - 1, 24, 4, 1, rd, 1); rrect(cx - 7, yy[7] - 1, 14, 3, 1, rd, 1); capsule(cx, yy[10], cx, yb - H0, .6f, .2f, rd, 1);
+        if (g_night > .12f) { float a = clampf(g_night * 1.3f, 0, 1); u32 og = RGB(255, 150, 60); for (int i = 0; i < 10; i++) { capsule(xl[i], yy[i], xl[i + 1], yy[i + 1], .8f, .8f, og, .6f * a); capsule(xr[i], yy[i], xr[i + 1], yy[i + 1], .8f, .8f, og, .6f * a); } glow_add(cx, yb - H0 * .4f, 54, og, .26f * a); if (((int)(g_t * 1.2f)) % 2 == 0) glow_add(cx, yb - H0, 5, RGB(255, 50, 50), a); } }
+    { float cx = CW * .84f, H0 = 164; u32 wh = KC(RGB(222, 228, 236), .04f); float sp[8] = { cx - 4, yb, cx + 4, yb, cx + 1.6f, yb - H0 * .8f, cx - 1.6f, yb - H0 * .8f }; poly(sp, 4, wh, 1); rrect(cx - 7, yb - H0 * .65f, 14, 4, 2, wh, 1); rrect(cx - 5, yb - H0 * .75f, 10, 3.2f, 1.6f, wh, 1); capsule(cx, yb - H0 * .8f, cx, yb - H0, .6f, .2f, wh, 1);
+        if (g_night > .12f) { float a = clampf(g_night * 1.3f, 0, 1); glow_add(cx, yb - H0 * .7f, 44, RGB(90, 170, 255), .3f * a); rrect(cx - 7, yb - H0 * .65f, 14, 4, 2, RGB(120, 200, 255), .8f * a); capsule(cx, yb, cx, yb - H0 * .8f, 1.2f, 1.2f, RGB(100, 180, 255), .3f * a); } }
+}
+static void minaret(float x, float yb, float h, u32 c, float e) { u32 cc = KC(c, e); rrect(x - 1.1f, yb - h, 2.2f, h, .4f, cc, 1); rrect(x - 2, yb - h * .72f, 4, 1.2f, .4f, cc, 1); float tp[6] = { x - 1.7f, yb - h, x + 1.7f, yb - h, x, yb - h - 7 }; poly(tp, 3, KC(RGB(96, 104, 118), e), 1); if (g_night > .2f) glow_add(x, yb - h * .72f, 4, RGB(255, 220, 140), .6f * g_night); }
+static void lm_istanbul(void) {
+    float yb = YB; skyline(0, CW, 8, 18, 8, 15, RGB(204, 150, 112), RGB(230, 186, 148), .12f, 81, 0);
+    { float cx = CW * .30f; u32 st = KC(RGB(192, 172, 144), .04f); rrect(cx - 4.5f, yb - 50, 9, 50, .4f, st, 1); rrect(cx - 6, yb - 52, 12, 3, .4f, st, 1); float tp[6] = { cx - 5.5f, yb - 52, cx + 5.5f, yb - 52, cx, yb - 68 }; poly(tp, 3, KC(RGB(110, 118, 130), .04f), 1); if (g_night > .2f) glow_add(cx, yb - 36, 14, RGB(255, 210, 130), .35f * g_night); }
+    { float cx = CW * .52f; u32 oc = KC(RGB(214, 170, 120), .04f), dm = KC(RGB(142, 152, 164), .04f); ellipse(cx, yb - 14, 13, 11, 0, dm, 1); ellipse(cx - 17, yb - 14, 8, 8, 0, dm, 1); ellipse(cx + 17, yb - 14, 8, 8, 0, dm, 1); rrect(cx - 26, yb - 14, 52, 14, .5f, oc, 1); rrect(cx - 26, yb - 14, 52, 2, .5f, scalec(oc, 1.15f, 1.12f, 1.05f), 1);
+        for (float x = cx - 22; x < cx + 22; x += 5) rrect(x, yb - 9, 1.6f, 4, .6f, KC(RGB(80, 60, 50), .04f), .7f); minaret(cx - 31, yb, 52, RGB(222, 204, 178), .04f); minaret(cx + 31, yb, 52, RGB(222, 204, 178), .04f); minaret(cx - 20, yb, 40, RGB(222, 204, 178), .04f); minaret(cx + 20, yb, 40, RGB(222, 204, 178), .04f);
+        if (g_night > .15f) { glow_add(cx, yb - 18, 40, RGB(255, 200, 120), .32f * g_night); ellipse(cx, yb - 14, 13, 11, 0, RGB(255, 210, 140), .35f * g_night); } }
+    { float cx = CW * .78f; u32 dm = KC(RGB(120, 140, 170), .04f), bd = KC(RGB(206, 206, 216), .04f); rrect(cx - 18, yb - 15, 36, 15, .5f, bd, 1); ellipse(cx, yb - 18, 12, 10, 0, dm, 1); for (int k = -1; k <= 1; k += 2) ellipse(cx + k * 13, yb - 15, 7, 6.5f, 0, dm, 1);
+        ellipse(cx, yb - 15, 8, 6, 0, dm, 1); minaret(cx - 24, yb, 54, RGB(214, 214, 224), .04f); minaret(cx + 24, yb, 54, RGB(214, 214, 224), .04f); minaret(cx - 15, yb, 44, RGB(214, 214, 224), .04f); minaret(cx + 15, yb, 44, RGB(214, 214, 224), .04f);
+        if (g_night > .15f) glow_add(cx, yb - 18, 34, RGB(150, 180, 255), .22f * g_night); }
+}
+static void pyramid(float cx, float w, float h, float yb) {
+    u32 lf = KC(RGB(232, 204, 146), .06f), rt = KC(RGB(184, 154, 102), .06f); float L[6] = { cx - w / 2, yb, cx, yb, cx, yb - h }, R[6] = { cx, yb, cx + w / 2, yb, cx, yb - h }; poly(L, 3, lf, 1); poly(R, 3, rt, 1);
+    for (int k = 1; k < 8; k++) { float t = k / 8.f; capsule(cx - w / 2 * (1 - t), yb - h * t, cx + w / 2 * (1 - t), yb - h * t, .18f, .18f, rt, .25f); }
+}
+static void lm_cairo(void) {
+    float yb = YB; skyline(0, CW, 6, 16, 8, 14, RGB(186, 162, 132), RGB(212, 190, 160), .4f, 91, 0); for (int k = 0; k < 8; k++) minaret(CW * (.04f + k * .12f), yb - 8, 18 + (k % 3) * 6, RGB(208, 186, 156), .35f);
+    { float cx = CW * .22f; u32 c = KC(RGB(210, 200, 190), .15f); capsule(cx, yb, cx, yb - 60, 2.4f, 1.2f, c, 1); ellipse(cx, yb - 62, 4.2f, 2, 0, c, 1); }
+    pyramid(CW * .38f, 118, 74, yb); pyramid(CW * .62f, 138, 86, yb); pyramid(CW * .88f, 66, 40, yb);
+    if (g_night > .2f) { u32 bc[3] = { RGB(80, 255, 140), RGB(255, 80, 100), RGB(90, 150, 255) }; for (int k = 0; k < 3; k++) { float bx = CW * (.30f + k * .24f) + sinf(g_t * .5f + k) * 6; float p[8] = { bx - 3, yb, bx + 3, yb, bx + 20 + sinf(g_t * .4f + k) * 12, yb - 110, bx - 4 + sinf(g_t * .4f + k) * 12, yb - 110 }; poly(p, 4, bc[k], .12f * g_night); } }
+}
+static void lm_sydney(void) {
+    float yb = YB; skyline(CW * .5f, CW, 24, 78, 9, 16, RGB(118, 140, 170), RGB(154, 172, 198), .16f, 101, 3); skyline(0, CW * .5f, 10, 28, 10, 18, RGB(150, 160, 178), RGB(176, 184, 198), .24f, 102, 0);
+    { float cx = CW * .90f; u32 gl = KC(RGB(190, 196, 206), .05f); capsule(cx, yb, cx, yb - 104, 1.8f, 1.1f, gl, 1); ellipse(cx, yb - 84, 8, 4.2f, 0, KC(RGB(222, 184, 80), .05f), 1); capsule(cx, yb - 106, cx, yb - 126, .5f, .2f, gl, 1); if (g_night > .15f) glow_add(cx, yb - 84, 16, RGB(255, 210, 110), .5f * g_night); }
+    { float x0 = CW * .03f, x1 = CW * .31f; u32 st = KC(RGB(120, 120, 128), .08f); float prev_x = x0, prev_y = yb - 8; for (int k = 1; k <= 20; k++) { float t = k / 20.f; float x = x0 + (x1 - x0) * t, y = yb - 8 - 46 * (1 - (2 * t - 1) * (2 * t - 1)); capsule(prev_x, prev_y, x, y, 1.1f, 1.1f, st, 1); if (k % 2 == 0) capsule(x, y, x, yb - 8, .2f, .2f, st, .6f); prev_x = x; prev_y = y; }
+        rrect(x0 - 3, yb - 28, 6, 28, .3f, KC(RGB(170, 150, 120), .08f), 1); rrect(x1 - 3, yb - 28, 6, 28, .3f, KC(RGB(170, 150, 120), .08f), 1); capsule(x0, yb - 8, x1, yb - 8, 1.2f, 1.2f, st, 1);
+        if (g_night > .2f) { for (float x = x0; x < x1; x += 7) glow_add(x, yb - 8, 3.5f, RGB(255, 210, 130), .6f * g_night); } }
+    { float cx = CW * .55f; rrect(cx - 38, yb - 5, 82, 5, .5f, KC(RGB(196, 186, 174), .04f), 1); u32 sh = KC(RGB(242, 238, 228), .02f), sd = scalec(sh, .78f, .78f, .86f);
+        float s[5][4] = { { -34, 26, 34, 0 }, { -22, 24, 40, 0 }, { -8, 22, 46, 0 }, { 14, 20, 34, 1 }, { 26, 16, 26, 1 } };
+        for (int k = 0; k < 5; k++) { float x = cx + s[k][0], w = s[k][1], h = s[k][2]; float p[10]; if (s[k][3] < .5f) { p[0] = x; p[1] = yb - 5; p[2] = x + w; p[3] = yb - 5; p[4] = x + w * .72f; p[5] = yb - 5 - h * .6f; p[6] = x + w * .42f; p[7] = yb - 5 - h; p[8] = x + w * .08f; p[9] = yb - 5 - h * .45f; }
+            else { p[0] = x; p[1] = yb - 5; p[2] = x + w; p[3] = yb - 5; p[4] = x + w * .92f; p[5] = yb - 5 - h * .45f; p[6] = x + w * .58f; p[7] = yb - 5 - h; p[8] = x + w * .28f; p[9] = yb - 5 - h * .6f; }
+            poly(p, 5, sh, 1); float q[6] = { p[4], p[5], p[2], p[3], p[0] + w * .5f, p[1] }; poly(q, 3, sd, .55f); }
+        if (g_night > .15f) { float a = clampf(g_night * 1.3f, 0, 1); u32 c = mixc(RGB(255, 170, 120), RGB(190, 150, 255), .5f + .5f * sinf(g_t * .3f)); glow_add(cx, yb - 22, 60, c, .3f * a); for (int k = 0; k < 5; k++) { float x = cx + s[k][0]; float p[6] = { x, yb - 5, x + s[k][1], yb - 5, x + s[k][1] * .4f, yb - 5 - s[k][2] }; poly(p, 3, c, .25f * a); } } }
+}
+static void lm_algiers(void) {
+    float yb = YB; for (int i = 0; i < 26; i++) { float x = CW * .44f + i * 7.4f; float h = 10 + i * 1.1f + ((i * 37) % 5); u32 wc = KC(RGB(238, 236, 228), .06f); float w = 8 + (i % 3);
+        rrect(x, yb - h, w, h, .4f, wc, 1); rrect(x + w * .6f, yb - h, w * .4f, h, .3f, scalec(wc, .82f, .84f, .9f), .6f); if (i % 4 == 0) rrect(x + 2, yb - 5, 2, 4, .5f, KC(RGB(60, 120, 190), .06f), 1); if (g_night > .15f && i % 2) rrect(x + 3, yb - h + 3, 1.6f, 2.2f, .3f, RGB(255, 214, 120), g_night * .9f); snowcap(x, yb - h, w); }
+    { float cx = CW * .33f; u32 wh = KC(RGB(230, 224, 206), .04f), gr = KC(RGB(44, 146, 96), .04f); rrect(cx - 60, yb - 14, 52, 14, .5f, wh, 1); ellipse(cx - 36, yb - 14, 14, 10, 0, gr, 1); for (float x = cx - 56; x < cx - 12; x += 5) rrect(x, yb - 9, 2, 5, .8f, KC(RGB(70, 60, 50), .04f), .6f);
+        float bp[8] = { cx - 4.2f, yb, cx + 4.2f, yb, cx + 3, yb - 112, cx - 3, yb - 112 }; poly(bp, 4, wh, 1); float rp[6] = { cx + .2f, yb, cx + 4.2f, yb, cx + 3, yb - 112 }; poly(rp, 3, scalec(wh, .8f, .82f, .88f), .6f);
+        for (int k = 1; k < 9; k++) rrect(cx - 3.4f + k * .02f, yb - k * 12.2f, 6.4f - k * .07f, 1.3f, .4f, KC(RGB(150, 140, 120), .04f), .55f); float tp[6] = { cx - 4.4f, yb - 112, cx + 4.4f, yb - 112, cx, yb - 126 }; poly(tp, 3, gr, 1); capsule(cx, yb - 126, cx, yb - 136, .5f, .2f, KC(RGB(222, 190, 80), .04f), 1);
+        if (g_night > .12f) { float a = clampf(g_night * 1.3f, 0, 1); glow_add(cx, yb - 118, 20, RGB(80, 255, 170), .6f * a); glow_add(cx, yb - 50, 40, RGB(255, 226, 170), .16f * a); ellipse(cx - 36, yb - 14, 14, 10, 0, RGB(90, 255, 170), .22f * a); } }
+    { float cx = CW * .82f; ellipse(cx, yb + 3, 54, 22, 0, KC(RGB(96, 120, 80), .08f), 1); rrect(cx - 18, yb - 12, 36, 6, .5f, KC(RGB(206, 202, 190), .05f), 1); u32 cn = KC(RGB(222, 218, 204), .05f), sd = scalec(cn, .76f, .78f, .84f);
+        float t1[8] = { cx - 14, yb - 12, cx - 7, yb - 12, cx - 1.5f, yb - 78, cx - 9, yb - 88 }, t2[8] = { cx - 4, yb - 12, cx + 4, yb - 12, cx + 2, yb - 94, cx - 2, yb - 94 }, t3[8] = { cx + 7, yb - 12, cx + 14, yb - 12, cx + 9, yb - 88, cx + 1.5f, yb - 78 };
+        poly(t1, 4, cn, 1); poly(t3, 4, sd, 1); poly(t2, 4, cn, 1); float s2[6] = { cx, yb - 12, cx + 4, yb - 12, cx + 2, yb - 94 }; poly(s2, 3, sd, .7f);
+        float fl = clampf(g_night * 1.3f + .35f, .35f, 1); glow_add(cx, yb - 15, 10, RGB(255, 150, 60), .8f * fl); circle(cx, yb - 14, 1.5f + .3f * sinf(g_t * 9), RGB(255, 190, 90), 1); if (g_night > .15f) glow_add(cx, yb - 50, 36, RGB(255, 226, 180), .2f * g_night); }
+}
+static void draw_landmarks(void) {
+    switch (lm_kind) { case LM_PARIS: lm_paris(); break; case LM_NYC: lm_nyc(); break; case LM_DUBAI: lm_dubai(); break; case LM_MOSCOW: lm_moscow(); break; case LM_LONDON: lm_london(); break; case LM_TOKYO: lm_tokyo(); break; case LM_ISTANBUL: lm_istanbul(); break; case LM_CAIRO: lm_cairo(); break; case LM_SYDNEY: lm_sydney(); break; case LM_ALGIERS: lm_algiers(); break; }
+}
+static void draw_palm(void) {
+    float ox = oak_x + 6; u32 tr = LT(RGB(140, 106, 70)), fr = LT(RGB(58, 118, 58));
+    for (int k = 0; k < 10; k++) { float t = k / 10.f, t2 = (k + 1) / 10.f; capsule(ox + 9 * t * t, 350 - 62 * t, ox + 9 * t2 * t2, 350 - 62 * t2, 3.6f - 1.4f * t, 3.4f - 1.4f * t2, tr, 1); if (k % 2) capsule(ox + 9 * t * t - 2, 350 - 62 * t, ox + 9 * t * t + 2, 350 - 62 * t, .4f, .4f, scalec(tr, .7f, .7f, .7f), .6f); }
+    float tx = ox + 9, ty = 288; for (int k = 0; k < 9; k++) { float a = -PI_F + k * PI_F / 8 + sinf(g_t * (1 + E.wind * .03f) + k) * .05f; float l = 26; float mx = tx + cosf(a) * l * .5f, my = ty + sinf(a) * l * .5f - 5, ex = tx + cosf(a) * l, ey = ty + sinf(a) * l * .5f + 10;
+        capsule(tx, ty, mx, my, 1.4f, 1.1f, mixc(fr, LT(RGB(238, 244, 255)), E.snowc * .5f), 1); capsule(mx, my, ex, ey, 1.1f, .3f, scalec(fr, .9f, .95f, .9f), 1); }
+    circle(tx - 2, ty + 3, 2, LT(RGB(110, 80, 50)), 1); circle(tx + 2, ty + 3.5f, 2, LT(RGB(110, 80, 50)), 1);
+    capsule(oak_x + 33, 350, oak_x + 33, 281, 2.2f, 1.8f, LT(RGB(110, 84, 60)), 1);
+}
+
 static void draw_village(void) {
     float night = g_night; u32 body_haze = skyBot; float hz = clampf(.1f + E.fog * .45f, 0, .9f);
-    for (int i = 0; i < nhouses; i++) {
+    if (lm_kind) draw_landmarks();
+    for (int i = 0; i < (lm_kind ? 0 : nhouses); i++) {
         House *h = &houses[i]; float yb = Y_RAIL - 6 + (i % 3) - 1; float x = h->x, w = h->w, hh = h->h;
         u32 body = mixc(LT(h->col), body_haze, hz), roof = mixc(LT(h->roof), body_haze, hz);
         rrect(x, yb - hh, w, hh, .8f, body, 1); rrect(x + w * .62f, yb - hh, w * .38f, hh, .8f, scalec(body, .84f, .84f, .88f), .55f);
@@ -821,10 +1007,12 @@ static void draw_village(void) {
         }
     }
     /* church */
+    if (!lm_kind) {
     float cx = CW * .5f, cb = Y_RAIL - 5; u32 cb_ = mixc(LT(RGB(226, 214, 190)), body_haze, hz); rrect(cx - 4.6f, cb - 22, 9.2f, 22, .8f, cb_, 1);
     float sp[6] = { cx - 5.4f, cb - 22, cx + 5.4f, cb - 22, cx, cb - 38 }; poly(sp, 3, mixc(LT(RGB(96, 70, 66)), body_haze, hz), 1);
     rrect(cx - 1.4f, cb - 18, 2.8f, 5, 1.2f, LT(RGB(40, 44, 56)), 1); capsule(cx, cb - 38, cx, cb - 43, .5f, .5f, RGB(210, 180, 80), 1);
     if (night > .15f) glow_add(cx, cb - 15.5f, 8, RGB(255, 200, 120), .3f * night);
+    }
     /* smoke */
     for (int i = 0; i < 28; i++) { if (sm[i][4] > 90) continue; float k = sm[i][4] / sm[i][5]; soft(sm[i][0], sm[i][1], 3 + k * 6, g_night > .5f ? RGB(70, 76, 94) : RGB(210, 212, 218), .22f * (1 - k), 1.5f); }
     /* embankment, rails, catenary */
@@ -899,7 +1087,7 @@ static void draw_lake(void) {
 static void draw_meadow(void) {
     int x0 = (int)(MARG * S), x1 = (int)((MARG + CW) * S); float yb = PX(CH);
     u32 ct = g_season == 1 ? RGB(118, 150, 66) : g_season == 2 ? RGB(150, 150, 120) : RGB(142, 140, 66), cb = g_season == 1 ? RGB(66, 118, 52) : g_season == 2 ? RGB(110, 124, 96) : RGB(84, 112, 48);
-    float sand = clampf(E.dust + E.heat * .6f, 0, 1); ct = mixc(ct, RGB(170, 140, 84), sand); cb = mixc(cb, RGB(140, 112, 64), sand);
+    float sand = clampf(E.dust + E.heat * .6f + (LMT[lm_kind].sand ? 1.f : 0.f), 0, 1); ct = mixc(ct, RGB(170, 140, 84), sand); cb = mixc(cb, RGB(140, 112, 64), sand);
     ct = mixc(LT(ct), LT(RGB(238, 244, 255)), E.snowc * .85f); cb = mixc(LT(cb), LT(RGB(214, 224, 242)), E.snowc * .85f);
     float wet = 1 - .18f * E.wet; ct = scalec(ct, wet, wet, wet); cb = scalec(cb, wet, wet, wet);
     for (int x = x0; x < x1; x++) {
@@ -923,6 +1111,7 @@ static void draw_meadow(void) {
 }
 static void draw_oak(void) {
     float ox = oak_x, w = 1 + E.wind * .04f; u32 bark = LT(RGB(84, 62, 44)); u32 snowc = LT(RGB(240, 246, 255)); float sc = E.snowc;
+    if (LMT[lm_kind].sand) draw_palm(); else {
     capsule(ox, 350, ox + 2, 296, 6, 3.6f, bark, 1); capsule(ox + 2, 296, ox + 44, 282, 2.5f, 1.3f, bark, 1); capsule(ox + 1, 304, ox - 18, 288, 2, 1, bark, 1);
     if (g_season == 2) { capsule(ox + 2, 296, ox + 8, 250, 2.6f, 1.2f, bark, 1); capsule(ox + 8, 262, ox + 30, 240, 1.6f, .8f, bark, 1); capsule(ox + 6, 272, ox - 14, 246, 1.5f, .8f, bark, 1); capsule(ox + 20, 252, ox + 38, 258, 1, .6f, bark, 1); }
     else {
@@ -931,6 +1120,7 @@ static void draw_oak(void) {
             u32 c = g_season == 0 ? pal[i % 5] : gp[i % 4]; float sh = .62f + .5f * clampf(1 - (cy - (oak_y - 55)) / 70, 0, 1); c = LT(scalec(c, sh, sh, sh)); c = mixc(c, snowc, sc * .7f); circle(cx, cy, r, c, 1);
             circle(cx - r * .25f, cy - r * .3f, r * .55f, scalec(c, 1.18f, 1.15f, 1.05f), .55f); }
         for (int i = 0; i < 6; i++) { float cx = ox + 30 + i * 3, cy = 280 - i * 1.2f; circle(cx, cy, 5, LT(g_season == 0 ? pal[(i + 1) % 5] : gp[i % 4]), 1); }
+    }
     }
     /* owl on the branch */
     float bx = ox + 33, by = 279.5f; u32 br = LT(RGB(124, 94, 68)), ch = LT(RGB(208, 186, 152)), wg = LT(RGB(96, 72, 52));
@@ -1014,13 +1204,13 @@ static void scene_update(float dt) {
     if (g_msg_t > 0) g_msg_t -= dt;
     if (E.storm > .3f) { next_strike -= dt * E.storm; if (next_strike <= 0) strike(); }
     g_flash_t += dt; g_flash = 0; if (g_flash_t < .55f) g_flash = (g_flash_t < .1f || g_flash_t > .16f) ? fmaxf(0, 1 - g_flash_t * 2.2f) : .25f;
-    if (g_flash_t > .7f && thunder_pending) { thunder_pending = 0; const char *m[] = { "KRA-KA-BOOOOM!", "*RUMBLE*", "CRAAACK!" }; /*say(m[(int)(rnd() * 3) % 3], 2);*/ }
+    if (g_flash_t > .7f && thunder_pending) { thunder_pending = 0; const char *m[] = { "KRA-KA-BOOOOM!", "*RUMBLE*", "CRAAACK!" }; say(m[(int)(rnd() * 3) % 3], 2); }
     if (!train.on) { next_train -= dt; if (next_train <= 0) { train_spawn(-1, 0); next_train = rndr(26, 55); } }
-    else { train.hx += train.dir * train.speed * dt; /*if (!train.horn && train.hx > 0 && train.hx < CW) { train.horn = 1; say(train.kind == 0 ? "TRAIN!  TUUUUUUU!" : "freight train... chug chug", 3); }*/
+    else { train.hx += train.dir * train.speed * dt; if (!train.horn && train.hx > 0 && train.hx < CW) { train.horn = 1; /* say(train.kind == 0 ? "TRAIN!  TUUUUUUU!" : "freight train... chug chug", 3); */ }
         float rear = train.hx - train.dir * train_len(); if ((train.dir == 1 && rear > CW + 4) || (train.dir == -1 && rear < -4)) train.on = 0; }
-    if (!ufo.on) { if (g_night > .7f && E.rain < .1f) { next_ufo -= dt; if (next_ufo <= 0) { memset(&ufo, 0, sizeof ufo); ufo.on = 1; ufo.side = rnd() < .5f ? -1.f : 1.f; ufo.x = ufo.side == 1 ? -20.f : CW + 20.f; ufo.y = 80; ufo.tx = sheep_x; next_ufo = rndr(90, 200); /*say("something is in the sky...", 4);*/ } } }
+    if (!ufo.on) { if (g_night > .7f && E.rain < .1f) { next_ufo -= dt; if (next_ufo <= 0) { memset(&ufo, 0, sizeof ufo); ufo.on = 1; ufo.side = rnd() < .5f ? -1.f : 1.f; ufo.x = ufo.side == 1 ? -20.f : CW + 20.f; ufo.y = 80; ufo.tx = sheep_x; next_ufo = rndr(90, 200); say("something is in the sky...", 4); } } }
     else { ufo.t += dt; if (ufo.state == 0) { float d = ufo.tx - ufo.x; ufo.x += clampf(d * 1.4f, -90, 90) * dt; if (fabsf(d) < 1) { ufo.state = 1; ufo.t = 0; } }
-        else if (ufo.state == 1) { if (ufo.t > 1 && ufo.t < 5.5f) ufo.lift = clampf((ufo.t - 1) / 4.5f, 0, 1); if (ufo.t > 1.3f && !ufo.said) { ufo.said = 1; /*say("BAAA?!", 3.5f);*/ } if (ufo.t > 5.8f) { ufo.state = 2; ufo.t = 0; ufo.vx = ufo.side * 5; ufo.vy = -3; sheep_gone = 45; } }
+        else if (ufo.state == 1) { if (ufo.t > 1 && ufo.t < 5.5f) ufo.lift = clampf((ufo.t - 1) / 4.5f, 0, 1); if (ufo.t > 1.3f && !ufo.said) { ufo.said = 1; say("BAAA?!", 3.5f); } if (ufo.t > 5.8f) { ufo.state = 2; ufo.t = 0; ufo.vx = ufo.side * 5; ufo.vy = -3; sheep_gone = 45; } }
         else { ufo.vx *= 1 + dt * 3; ufo.vy *= 1 + dt * 3; ufo.x += ufo.vx * dt * 12; ufo.y += ufo.vy * dt * 12; if (ufo.x < -40 || ufo.x > CW + 40 || ufo.y < -30) ufo.on = 0; } }
     if (sheep_gone > 0) sheep_gone -= dt;
     sheep_x += sheep_dir * 1.6f * dt * ((int)(g_t * .35f) % 3 != 0); if (sheep_x < 110 || sheep_x > 280) sheep_dir = -sheep_dir;
@@ -1044,7 +1234,7 @@ static void scene_update(float dt) {
     else { plane_x += plane_d * 22 * dt; if (plane_x < -8 || plane_x > CW + 8) plane_on = 0; }
     if (g_season == 0 && E.wind > 3) { for (int i = 0; i < 16; i++) if (lv[i][5] < 0 && rnd() < dt * (.6f + E.wind * .05f)) { lv[i][0] = oak_x + rndr(-6, 36); lv[i][1] = oak_y - 40 + rndr(0, 30); lv[i][2] = 0; lv[i][3] = rndr(8, 16); lv[i][4] = rnd() * 6; lv[i][5] = (float)((int)(rnd() * 4)); break; } }
     for (int i = 0; i < 16; i++) { if (lv[i][5] < 0) continue; lv[i][4] += dt * 3; lv[i][0] += (E.wind * .9f * g_wsign + sinf(lv[i][4]) * 8) * dt * .5f; lv[i][1] += lv[i][3] * dt; if (lv[i][1] > Y_L1 + 2 || lv[i][0] < -10 || lv[i][0] > CW + 10) lv[i][5] = -1; }
-    for (int i = 0; i < nhouses; i++) if (houses[i].chy > .5f && (g_temp < 22 || g_night > .3f) && rnd() < dt * .35f) for (int k = 0; k < 28; k++) if (sm[k][4] > 90) { float yb = Y_RAIL - 6 + (i % 3) - 1; sm[k][0] = houses[i].x + houses[i].chx + 1; sm[k][1] = yb - houses[i].h - houses[i].rh * .8f; sm[k][2] = 0; sm[k][3] = rndr(6, 11); sm[k][4] = 0; sm[k][5] = rndr(4, 6); break; }
+    for (int i = 0; i < (lm_kind ? 0 : nhouses); i++) if (houses[i].chy > .5f && (g_temp < 22 || g_night > .3f) && rnd() < dt * .35f) for (int k = 0; k < 28; k++) if (sm[k][4] > 90) { float yb = Y_RAIL - 6 + (i % 3) - 1; sm[k][0] = houses[i].x + houses[i].chx + 1; sm[k][1] = yb - houses[i].h - houses[i].rh * .8f; sm[k][2] = 0; sm[k][3] = rndr(6, 11); sm[k][4] = 0; sm[k][5] = rndr(4, 6); break; }
     for (int k = 0; k < 28; k++) { if (sm[k][4] > 90) continue; sm[k][4] += dt; sm[k][0] += (E.wind * .4f * g_wsign + rndr(-1.5f, 1.5f)) * dt; sm[k][1] -= sm[k][3] * dt; if (sm[k][4] >= sm[k][5]) sm[k][4] = 99; }
     for (int i = 0; i < 40; i++) if (rg[i][2] <= 1.2f) rg[i][2] += dt;
     float wx = E.wind * 1.1f * g_wsign; int nr = (int)(fminf(1, E.rain + E.hail * .4f) * 260 * .55f);
@@ -1162,9 +1352,9 @@ static void draw_ui(void) {
         snprintf(buf, sizeof buf, "%d°", tfv(f->hi)); text(1, 11.5f, cx - 9, cy + 50, buf, 0xFFFFFF, .95f, 0, 1); snprintf(buf, sizeof buf, "%d°", tfv(f->lo)); text(1, 11.5f, cx + 11, cy + 50, buf, 0xFFFFFF, .5f, 0, 1);
     }
     /* status line */
-    /*if (status_t > 0) { text(1, 9.5f, CW / 2.f, 20, status, RGB(255, 236, 190), clampf(status_t, 0, 1), .5f, 1); }
+    if (status_t > 0) { text(1, 9.5f, CW / 2.f, 20, status, RGB(255, 236, 190), clampf(status_t, 0, 1), .5f, 1); }
     else if (has_w) { snprintf(buf, sizeof buf, "%s%s", W.src, job.active ? "  ·  updating" : ""); text(1, 8.6f, CW - 24, 214, buf, 0xFFFFFF, .5f, .6f, 2); }
-    *//* menu */
+    /* menu */
     if (ui_mode == 2) {
         float mx = CW - 196, my = 48, mw = 176, mh = NMENU * 30 + 12; glass(mx, my, mw, mh, 16, 1.5f, 0);
         for (int i = 0; i < NMENU; i++) { char it[64]; const char *s = MENU_ITEMS[i];
@@ -1223,7 +1413,7 @@ static void apply_env(void) {
 }
 static void apply_time(void) {
     static float last = -9; static struct tm tm; if (g_t - last > .25f || last < 0) { last = g_t; city_time(t_off, &tm); }
-    float hour = tm.tm_hour + tm.tm_min / 60.f + tm.tm_sec / 3600.f; float rise = W.rise, set = W.set;
+    g_min = tm.tm_min; float hour = tm.tm_hour + tm.tm_min / 60.f + tm.tm_sec / 3600.f; float rise = W.rise, set = W.set;
     if (rise <= 0 && set <= 0) { sun_times(cfg.lat, cfg.lon, tm.tm_yday, W.has_off ? W.tz_off : utc_off_hours(), &rise, &set); }
     if (set - rise < 1 || set - rise > 23) { rise = 6; set = 18; }
     g_hour = hour; g_rise = rise; g_set = set; g_moon = moon_phase(time(NULL) + (time_t)(t_off * 3600));
@@ -1406,10 +1596,10 @@ static void write_ppm(const char *path) {
     fclose(f);
 }
 static void usage(void) {
-    puts("skyglass - glass weather gadget (X11)\n  --demo            offline demo data\n  --city NAME       search & remember a city from the command line\n  --scale N         UI scale (1.0 default, saved)(N float)\n  --fps N           frame rate (default 30)(N int)\n  --below | --ontop keep the window under / over other windows\n  --reset           forget the saved city\n  keys: c weather  [ ] time  f lapse  w showreel  t train  l lightning  a aurora  o ufo  u units  r refresh  n city  q quit\n  mouse: drag to move, click the dots (or right-click) for the menu, wheel = time");
+    puts("skyglass - glass weather gadget (X11)\n  --demo            offline demo data\n  --city NAME       search & remember a city from the command line\n  --scale N         UI scale (1.0 default, saved)\n  --fps N           frame rate (default 30)\n  --below | --ontop keep the window under / over other windows\n  --reset           forget the saved city\n  keys: c weather  [ ] time  f lapse  w showreel  t train  l lightning  a aurora  o ufo  u units  r refresh  n city  q quit\n  mouse: drag to move, click the dots (or right-click) for the menu, wheel = time");
 }
 int main(int argc, char **argv) {
-    const char *shot = NULL; int shot_frames = 60, shot_search = 0, shot_menu = 0, shot_train = 0, shot_aur = 0; float shot_hour = -1, shot_temp = -999; int shot_cond = -1; const char *city_arg = NULL; float scale_arg = 0;
+    const char *shot = NULL; int shot_frames = 60, shot_search = 0, shot_menu = 0, shot_train = 0, shot_aur = 0, shot_lm = 0; float shot_hour = -1, shot_temp = -999; int shot_cond = -1; const char *city_arg = NULL; float scale_arg = 0;
     cfg_load();
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(); return 0; }
@@ -1420,11 +1610,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc) shot = argv[++i]; else if (!strcmp(argv[i], "--frames") && i + 1 < argc) shot_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--hour") && i + 1 < argc) shot_hour = atof(argv[++i]); else if (!strcmp(argv[i], "--temp") && i + 1 < argc) shot_temp = atof(argv[++i]);
         else if (!strcmp(argv[i], "--cond") && i + 1 < argc) { i++; for (int k = 0; k < NCOND; k++) if (!strcmp(argv[i], cond_name[k])) shot_cond = k; }
-        else if (!strcmp(argv[i], "--search")) shot_search = 1; else if (!strcmp(argv[i], "--menu")) shot_menu = 1; else if (!strcmp(argv[i], "--train")) shot_train = 1; else if (!strcmp(argv[i], "--aur")) shot_aur = 1;
+        else if (!strcmp(argv[i], "--lm") && i + 1 < argc) shot_lm = atoi(argv[++i]); else if (!strcmp(argv[i], "--search")) shot_search = 1; else if (!strcmp(argv[i], "--menu")) shot_menu = 1; else if (!strcmp(argv[i], "--train")) shot_train = 1; else if (!strcmp(argv[i], "--aur")) shot_aur = 1;
     }
     if (!cfg.key[0] && getenv("TWC_API_KEY")) snprintf(cfg.key, sizeof cfg.key, "%s", getenv("TWC_API_KEY"));
     if (scale_arg > .5f) cfg.scale = scale_arg; S = cfg.scale; PW = (int)(WW * S); PH = (int)(WH * S);
-    if (shot) { S = scale_arg > .5f ? scale_arg : 1; PW = (int)(WW * S); PH = (int)(WH * S); if (!cfg.have_city) { snprintf(cfg.city, sizeof cfg.city, "Algiers"); snprintf(cfg.country, sizeof cfg.country, "DZ"); snprintf(cfg.tz, sizeof cfg.tz, "Africa/Algiers"); cfg.lat = 36.75f; cfg.lon = 3.06f; cfg.have_city = 1; } g_demo = 1; }
+    if (shot) { S = scale_arg > .5f ? scale_arg : 1; PW = (int)(WW * S); PH = (int)(WH * S); if (!cfg.have_city) { snprintf(cfg.city, sizeof cfg.city, "Algiers"); snprintf(cfg.country, sizeof cfg.country, "DZ"); snprintf(cfg.tz, sizeof cfg.tz, "Africa/Algiers"); cfg.lat = 36.75f; cfg.lon = 3.06f; cfg.have_city = 1; } g_demo = 1; if (shot_lm > 0 && shot_lm < NLM) { snprintf(cfg.city, sizeof cfg.city, "%s", LMT[shot_lm].n); cfg.lat = LMT[shot_lm].lat; cfg.lon = LMT[shot_lm].lon; cfg.country[0] = 0; static const char *TZS[] = { "", "Europe/Paris", "America/New_York", "Asia/Dubai", "Europe/Moscow", "Europe/London", "Asia/Tokyo", "Europe/Istanbul", "Africa/Cairo", "Australia/Sydney", "Africa/Algiers" }; snprintf(cfg.tz, sizeof cfg.tz, "%s", TZS[shot_lm]); } }
     if (city_arg && !shot) { snprintf(qbuf, sizeof qbuf, "%s", city_arg); qlen = (int)strlen(qbuf);         char enc[200], url[700], cmd[900]; urlenc(city_arg, enc, sizeof enc); snprintf(url, sizeof url, "https://geocoding-api.open-meteo.com/v1/search?name=%s&count=1&language=en&format=json", enc); snprintf(cmd, sizeof cmd, "curl -sfL -m 10 '%s'", url);
         FILE *p = popen(cmd, "r"); static char big[20000]; size_t n = p ? fread(big, 1, sizeof big - 1, p) : 0; if (p) pclose(p); big[n] = 0; parse_hits_openmeteo(big);
         if (nhits > 0) { CityHit *h = &hits[0]; snprintf(cfg.city, sizeof cfg.city, "%s", h->name); snprintf(cfg.country, sizeof cfg.country, "%s", h->country); snprintf(cfg.tz, sizeof cfg.tz, "%s", h->tz); cfg.lat = h->lat; cfg.lon = h->lon; cfg.have_city = 1; cfg_save(); } else fprintf(stderr, "skyglass: city '%s' not found\n", city_arg); nhits = 0; }
